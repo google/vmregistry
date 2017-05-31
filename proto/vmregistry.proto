@@ -1,0 +1,29 @@
+syntax = "proto3";
+package api;
+
+message VM {
+  string name = 1;
+  string mac = 2;
+  string ip = 3;
+}
+
+message ListVMRequest {}
+
+message ListVMReply {
+  repeated VM vms = 1;
+}
+
+message FindRequest {
+  enum FindBy {
+    UNSPECIFIED = 0;
+    IP = 1;
+    MAC = 2;
+  }
+  FindBy find_by = 1;
+  string value = 2;
+}
+
+service VMRegistry {
+  rpc List(ListVMRequest) returns (ListVMReply) {}
+  rpc Find(FindRequest) returns (VM) {}
+}
