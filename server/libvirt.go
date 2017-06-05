@@ -41,7 +41,7 @@ type libvirtDevice struct {
 }
 
 type libvirtMetadata struct {
-	MLP mlpMetadata `xml:"mlp"`
+	VMRegistry vmMetadata `xml:"vmregistry"`
 }
 
 type libvirtDomain struct {
@@ -49,7 +49,7 @@ type libvirtDomain struct {
 	Metadata libvirtMetadata `xml:"metadata"`
 }
 
-type mlpMetadata struct {
+type vmMetadata struct {
 	IP string `xml:"ip"`
 }
 
@@ -68,6 +68,22 @@ func traceListAllDomains(ctx context.Context, conn *libvirt.Connect) ([]libvirt.
 
 	sp.LogFields(log.Int("domains", len(domains)))
 	return domains, nil
+}
+
+func traceGetDomainByName(ctx context.Context, conn *libvirt.Connect, name string) (*libvirt.Domain, error) {
+	sp, _ := opentracing.StartSpanFromContext(ctx, "libvirt.LookupDomainByName")
+	sp.SetTag("component", "libvirt")
+	sp.SetTag("span.kind", "client")
+	defer sp.Finish()
+
+	domain, err := conn.LookupDomainByName(name)
+
+	if err != nil {
+		sp.SetTag("error", true)
+		return nil, grpc.Errorf(codes.Unavailable, "failed to get domain %s: %v", name, err)
+	}
+
+	return domain, nil
 }
 
 func traceDomainGetName(ctx context.Context, dom libvirt.Domain) (string, error) {

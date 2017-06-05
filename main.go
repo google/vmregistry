@@ -21,85 +21,77 @@ package main
 import (
 	"context"
 	"flag"
+	"net"
 
-	"github.com/google/credstore/client"
 	pb "github.com/google/vmregistry/api"
 	"github.com/google/vmregistry/server"
 	"github.com/google/vmregistry/web"
 
-	microClient "github.com/google/go-microservice-helpers/client"
-	microServer "github.com/google/go-microservice-helpers/server"
-	"github.com/google/go-microservice-helpers/tracing"
 	"github.com/golang/glog"
-	"github.com/grpc-ecosystem/go-grpc-middleware"
-	"github.com/grpc-ecosystem/go-grpc-prometheus"
-	"github.com/grpc-ecosystem/grpc-opentracing/go/otgrpc"
+	"github.com/google/go-microservice-helpers/server"
+	"github.com/google/go-microservice-helpers/tracing"
 	"github.com/libvirt/libvirt-go"
-	opentracing "github.com/opentracing/opentracing-go"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/reflection"
 )
 
 var (
 	libvirtURI = flag.String("libvirt-uri", "", "libvirt connection uri")
+	vmNet      = flag.String("vm-net", "", "A subnet for VM ip address generation")
+	vmVG       = flag.String("vm-vg", "", "lvm volume group for storage")
 
-	credStoreAddress = flag.String("credstore-address", "", "credstore grpc address")
-	credStoreCA      = flag.String("credstore-ca", "", "credstore server ca")
+	lvmdAddress = flag.String("lvmd-address", "", "lvmd grpc address")
+	lvmdCA      = flag.String("lvmd-ca", "", "lvmd server ca")
+
+	dnsAPIURL = flag.String("pdns-api-url", "", "PowerDNS base URL")
+	dnsZone   = flag.String("pdns-zone", "", "Zone to host VMs")
+	dnsAPIKey = flag.String("pdns-api-key", "", "PowerDNS API Key")
 )
 
 func main() {
 	flag.Parse()
 	defer glog.Flush()
 
-	conn, err := libvirt.NewConnectReadOnly(*libvirtURI)
+	conn, err := libvirt.NewConnect(*libvirtURI)
 	if err != nil {
 		glog.Fatalf("failed to connect to libvirt: %v", err)
 	}
 
-	err = tracing.InitTracer(*microServer.ListenAddress, "vmregistry")
+	err = tracing.InitTracer(*serverhelpers.ListenAddress, "vmregistry")
 	if err != nil {
 		glog.Fatalf("failed to init tracing interface: %v", err)
 	}
 
-	svr := server.NewServer(conn)
-
-	var grpcServer *grpc.Server
-
-	if *credStoreAddress != "" {
-		appTok, err := client.GetAppToken()
-		if err != nil {
-			glog.Fatalf("failed to get app token: %v", err)
-		}
-		conn, err := microClient.NewGRPCConn(*credStoreAddress, *credStoreCA, "", "")
-		if err != nil {
-			glog.Fatalf("failed to create connection to credstore: %v", err)
-		}
-		credStoreKey, err := client.GetSigningKey(context.Background(), conn, appTok)
-		if err != nil {
-			glog.Fatalf("failed to get signing key: %v", err)
-		}
-
-		glog.Infof("enabled credstore auth")
-		grpcServer = grpc.NewServer(
-			grpc.UnaryInterceptor(grpc_middleware.ChainUnaryServer(
-				otgrpc.OpenTracingServerInterceptor(opentracing.GlobalTracer()),
-				grpc_prometheus.UnaryServerInterceptor,
-				client.CredStoreTokenInterceptor(credStoreKey),
-				client.CredStoreMethodAuthInterceptor(),
-			)))
-	} else {
-		grpcServer = grpc.NewServer(
-			grpc.UnaryInterceptor(
-				otgrpc.OpenTracingServerInterceptor(opentracing.GlobalTracer())))
+	_, net, err := net.ParseCIDR(*vmNet)
+	if err != nil {
+		glog.Fatalf("failed to parse vm net: %v", err)
 	}
 
+	grpcServer, credstoreClient, err := serverhelpers.NewServer()
+	if err != nil {
+		glog.Fatalf("failed to init GRPC server: %v", err)
+	}
+	if credstoreClient == nil {
+		glog.Fatalf("failed to init credstore")
+	}
+
+	lvmSessionTok, err := credstoreClient.GetTokenForRemote(context.Background(), *lvmdAddress)
+	if err != nil {
+		glog.Fatalf("failed to get lvmd token: %v", err)
+	}
+
+	storage, err := server.NewLVMStorage(*lvmdAddress, *lvmdCA, *vmVG, lvmSessionTok)
+	if err != nil {
+		glog.Fatalf("failed to create connection to lvmd: %v", err)
+	}
+
+	dnsCli := server.NewDNSClient(*dnsAPIURL, *dnsZone, *dnsAPIKey)
+
+	svr := server.NewServer(conn, storage, net, dnsCli)
+
 	pb.RegisterVMRegistryServer(grpcServer, &svr)
-	reflection.Register(grpcServer)
-	grpc_prometheus.Register(grpcServer)
 
 	statusHandler := web.NewStatusHandler(&svr)
 
-	err = microServer.ListenAndServe(grpcServer, statusHandler)
+	err = serverhelpers.ListenAndServe(grpcServer, statusHandler)
 	if err != nil {
 		glog.Fatalf("failed to serve: %v", err)
 	}

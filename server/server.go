@@ -19,7 +19,10 @@ limitations under the License.
 package server
 
 import (
+	"bytes"
 	"encoding/xml"
+	"html/template"
+	"net"
 
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
@@ -41,17 +44,31 @@ func extractMACs(dom libvirtDomain) []string {
 }
 
 func extractIP(dom libvirtDomain) string {
-	return dom.Metadata.MLP.IP
+	return dom.Metadata.VMRegistry.IP
+}
+
+type StorageManager interface {
+	CreateStorage(ctx context.Context, name string, size uint64, sourceImage string) error
+	RemoveStorage(ctx context.Context, name string) error
+	StorageBlockDevice(name string) string
 }
 
 // Server is GRPC server.
 type Server struct {
-	conn *libvirt.Connect
+	conn    *libvirt.Connect
+	storage StorageManager
+	vmNet   *net.IPNet
+	dnsCli  *DnsClient
 }
 
 // NewServer creates a new server instance.
-func NewServer(conn *libvirt.Connect) Server {
-	return Server{conn: conn}
+func NewServer(conn *libvirt.Connect, storage StorageManager, vmNet *net.IPNet, dnsCli *DnsClient) Server {
+	return Server{
+		conn:    conn,
+		storage: storage,
+		vmNet:   vmNet,
+		dnsCli:  dnsCli,
+	}
 }
 
 // List is GRPC handler for List API.
@@ -158,3 +175,188 @@ func (s Server) Find(ctx context.Context, req *pb.FindRequest) (*pb.VM, error) {
 
 	return nil, grpc.Errorf(codes.NotFound, "ip not found")
 }
+
+// Create is GRPC handler for Create API.
+func (s Server) Create(ctx context.Context, in *pb.CreateRequest) (*pb.VM, error) {
+	name := in.GetName()
+	if name == "" {
+		return nil, grpc.Errorf(codes.InvalidArgument, "name not specified")
+	}
+	mem := in.GetMem()
+	if mem == 0 {
+		return nil, grpc.Errorf(codes.InvalidArgument, "mem not specified")
+	}
+	cores := in.GetCores()
+	if cores == 0 {
+		return nil, grpc.Errorf(codes.InvalidArgument, "cores not specified")
+	}
+	size := in.GetSize()
+	if size == 0 {
+		return nil, grpc.Errorf(codes.InvalidArgument, "size not specified")
+	}
+	sourceImage := in.GetSourceImage()
+	if sourceImage == "" {
+		return nil, grpc.Errorf(codes.InvalidArgument, "sourceImage not specified")
+	}
+
+	err := s.storage.CreateStorage(ctx, name, size, sourceImage)
+	if err != nil {
+		return nil, grpc.Errorf(codes.Internal, "failed to create storage: %v", err)
+	}
+
+	var ip net.IP
+	for i := 0; i < 10; i++ {
+		tryip := generateIPv4(s.vmNet)
+		searchReq := &pb.FindRequest{
+			FindBy: pb.FindRequest_IP,
+			Value:  tryip.String(),
+		}
+		_, err := s.Find(ctx, searchReq)
+		code := grpc.Code(err)
+		if code == codes.NotFound {
+			ip = tryip
+			break
+		}
+	}
+	if len(ip) == 0 {
+		return nil, grpc.Errorf(codes.Unavailable, "failed to generate a new ip after 10 attempts")
+	}
+
+	var domBuffer bytes.Buffer
+	xmlTemplate.Execute(&domBuffer, struct {
+		Name     string
+		Memory   uint64
+		Cores    uint32
+		DiskPath string
+		IP       string
+	}{
+		Name:     name,
+		Memory:   in.GetMem(),
+		Cores:    in.GetCores(),
+		DiskPath: s.storage.StorageBlockDevice(name),
+		IP:       ip.String(),
+	})
+	domXML := domBuffer.String()
+
+	d, err := s.conn.DomainDefineXML(domXML)
+	if err != nil {
+		return nil, grpc.Errorf(codes.Internal, "failed to define vm: %v", err)
+	}
+
+	err = d.Create()
+	if err != nil {
+		return nil, grpc.Errorf(codes.Internal, "failed to create vm: %v", err)
+	}
+
+	err = s.dnsCli.Add(name, ip.String())
+	if err != nil {
+		return nil, grpc.Errorf(codes.Internal, "failed to update dns record: %v", err)
+	}
+
+	return &pb.VM{
+		Name: name,
+		Ip:   ip.String(),
+		Mac:  "FIXME",
+	}, nil
+}
+
+// Destroy is GRPC handler for Destroy API.
+func (s Server) Destroy(ctx context.Context, in *pb.DestroyRequest) (*pb.DestroyReply, error) {
+	name := in.GetName()
+	if name == "" {
+		return nil, grpc.Errorf(codes.InvalidArgument, "name not specified")
+	}
+
+	dom, err := traceGetDomainByName(ctx, s.conn, name)
+	if err != nil {
+		return nil, grpc.Errorf(codes.Internal, "failed to lookup vm: %v", err)
+	}
+
+	domXML, err := traceDomainGetXMLDesc(ctx, *dom)
+	if err != nil {
+		return nil, grpc.Errorf(codes.Internal, "failed to get vm xml: %v", err)
+	}
+
+	domData := libvirtDomain{}
+	err = xml.Unmarshal([]byte(domXML), &domData)
+	if err != nil {
+		return nil, grpc.Errorf(codes.Internal, "failed to parse domain xml: %v", err)
+	}
+
+	ip := extractIP(domData)
+	if ip == "" {
+		return nil, grpc.Errorf(codes.Internal, "failed to get ip for node %s", name)
+	}
+
+	err = s.dnsCli.Remove(name, ip)
+	if err != nil {
+		return nil, grpc.Errorf(codes.Internal, "failed to update dns record: %v", err)
+	}
+
+	err = dom.Destroy()
+	if err != nil {
+		glog.Infof("failed to destroy vm: %v, continuing with undefining", err)
+	}
+
+	err = dom.Undefine()
+	if err != nil {
+		return nil, grpc.Errorf(codes.Internal, "failed to undefine vm: %v", err)
+	}
+
+	err = s.storage.RemoveStorage(ctx, name)
+	if err != nil {
+		return nil, grpc.Errorf(codes.Internal, "failed to remove vm storage: %v", err)
+	}
+
+	return &pb.DestroyReply{}, nil
+}
+
+const xmlTemplateText = `
+<domain type="kvm">
+	<name>{{.Name}}</name>
+	<metadata>
+    <vmregistry:vmregistry xmlns:vmregistry="https://github.com/google/vmregistry/">
+      <ip>{{.IP}}</ip>
+    </vmregistry:vmregistry>
+  </metadata>
+	<memory unit="GiB">{{.Memory}}</memory>
+	<currentMemory unit="GiB">{{.Memory}}</currentMemory>
+	<vcpu>{{.Cores}}</vcpu>
+	<os>
+		<type arch="x86_64" machine="pc">hvm</type>
+		<boot dev="hd"/>
+	</os>
+	<features>
+		<acpi/>
+		<apic/>
+		<pae/>
+		<hap/>
+	</features>
+	<clock offset="utc"/>
+	<on_poweroff>destroy</on_poweroff>
+	<on_reboot>restart</on_reboot>
+	<on_crash>restart</on_crash>
+	<on_lockfailure>poweroff</on_lockfailure>
+	<devices>
+		<disk type="block" device="disk">
+			<driver name="qemu" type="raw"/>
+			<source dev="{{.DiskPath}}"/>
+			<target dev="vda" bus="virtio"/>
+		</disk>
+		<disk type="block" device="disk">
+			<driver name="qemu" type="raw"/>
+			<source dev="/var/lib/libvirt/images/cloudinit"/>
+			<target dev="hdc" bus="virtio"/>
+			<readonly/>
+		</disk>
+		<interface type="direct">
+			<source dev="vmbr" mode="bridge"/>
+			<model type="virtio"/>
+		</interface>
+		<memballoon model="virtio"/>
+		<console type="pty"/>
+	</devices>
+</domain>
+`
+
+var xmlTemplate = template.Must(template.New("domain").Parse(xmlTemplateText))
