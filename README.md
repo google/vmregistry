@@ -1,5 +1,7 @@
 # VMRegistry
 
+[![Docker Repository on Quay](https://quay.io/repository/picoprod/vmregistry/status "Docker Repository on Quay")](https://quay.io/repository/picoprod/vmregistry)
+
 **This is not an official Google product**
 
 VMRegistry is a simple GRPC-based API around libvirt that allows to query VM
