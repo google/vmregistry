@@ -20,6 +20,8 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"os"
 
 	"github.com/golang/glog"
@@ -27,6 +29,10 @@ import (
 	"github.com/spf13/cobra"
 
 	pb "github.com/google/vmregistry/api"
+)
+
+var (
+	outputJSON bool
 )
 
 // lsCmd represents the ls command
@@ -57,6 +63,12 @@ to quickly create a Cobra application.`,
 			glog.Fatalf("failed to get list of VMs: %v", err)
 		}
 
+		if outputJSON {
+			b, _ := json.Marshal(repl)
+			fmt.Println(string(b))
+			return
+		}
+
 		table := tablewriter.NewWriter(os.Stdout)
 		table.SetHeader([]string{"Name", "MAC", "IP"})
 
@@ -76,7 +88,5 @@ func init() {
 	// and all subcommands, e.g.:
 	// lsCmd.PersistentFlags().String("foo", "", "A help for foo")
 
-	// Cobra supports local flags which will only run when this command
-	// is called directly, e.g.:
-	// lsCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
+	lsCmd.Flags().BoolVar(&outputJSON, "json", false, "Output in JSON")
 }
