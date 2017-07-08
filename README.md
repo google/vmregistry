@@ -9,7 +9,7 @@ You can find all the currently exposed APIs in `proto/vmregistry.proto`.
 
 ## Accessing VMRegistry
 
-VMRegistry auth is based on JWT as provided by [credstore](fixme). Consult
+VMRegistry auth is based on JWT as provided by [credstore](https://github.com/google/credstore). Consult
 credstore documentation on how to generate a token.
 
 There's no RBAC at the moment, so anyone holding a valid token has full access
