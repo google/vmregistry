@@ -21,6 +21,8 @@ package main
 import (
 	"context"
 	"flag"
+	"html/template"
+	"io/ioutil"
 	"net"
 
 	pb "github.com/google/vmregistry/api"
@@ -35,6 +37,7 @@ import (
 
 var (
 	libvirtURI = flag.String("libvirt-uri", "", "libvirt connection uri")
+	vmTemplate = flag.String("vm-template-file", "", "path to libvirt xml template file to be used for vm creation")
 	vmNet      = flag.String("vm-net", "", "A subnet for VM ip address generation")
 	vmVG       = flag.String("vm-vg", "", "lvm volume group for storage")
 
@@ -83,9 +86,15 @@ func main() {
 		glog.Fatalf("failed to create connection to lvmd: %v", err)
 	}
 
+	tpl, err := ioutil.ReadFile(*vmTemplate)
+	if err != nil {
+		glog.Fatalf("failed to load vm template: %v", err)
+	}
+	var xmlTemplate = template.Must(template.New("domain").Parse(string(tpl)))
+
 	dnsCli := server.NewDNSClient(*dnsAPIURL, *dnsZone, *dnsAPIKey)
 
-	svr := server.NewServer(conn, storage, net, dnsCli)
+	svr := server.NewServer(conn, storage, net, dnsCli, xmlTemplate)
 
 	pb.RegisterVMRegistryServer(grpcServer, &svr)
 

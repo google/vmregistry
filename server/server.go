@@ -59,15 +59,18 @@ type Server struct {
 	storage StorageManager
 	vmNet   *net.IPNet
 	dnsCli  *DnsClient
+
+	xmlTemplate *template.Template
 }
 
 // NewServer creates a new server instance.
-func NewServer(conn *libvirt.Connect, storage StorageManager, vmNet *net.IPNet, dnsCli *DnsClient) Server {
+func NewServer(conn *libvirt.Connect, storage StorageManager, vmNet *net.IPNet, dnsCli *DnsClient, xmlTemplate *template.Template) Server {
 	return Server{
-		conn:    conn,
-		storage: storage,
-		vmNet:   vmNet,
-		dnsCli:  dnsCli,
+		conn:        conn,
+		storage:     storage,
+		vmNet:       vmNet,
+		dnsCli:      dnsCli,
+		xmlTemplate: xmlTemplate,
 	}
 }
 
@@ -223,7 +226,7 @@ func (s Server) Create(ctx context.Context, in *pb.CreateRequest) (*pb.VM, error
 	}
 
 	var domBuffer bytes.Buffer
-	xmlTemplate.Execute(&domBuffer, struct {
+	s.xmlTemplate.Execute(&domBuffer, struct {
 		Name     string
 		Memory   uint64
 		Cores    uint32
@@ -310,53 +313,3 @@ func (s Server) Destroy(ctx context.Context, in *pb.DestroyRequest) (*pb.Destroy
 
 	return &pb.DestroyReply{}, nil
 }
-
-const xmlTemplateText = `
-<domain type="kvm">
-	<name>{{.Name}}</name>
-	<metadata>
-    <vmregistry:vmregistry xmlns:vmregistry="https://github.com/google/vmregistry/">
-      <ip>{{.IP}}</ip>
-    </vmregistry:vmregistry>
-  </metadata>
-	<memory unit="GiB">{{.Memory}}</memory>
-	<currentMemory unit="GiB">{{.Memory}}</currentMemory>
-	<vcpu>{{.Cores}}</vcpu>
-	<os>
-		<type arch="x86_64" machine="pc">hvm</type>
-		<boot dev="hd"/>
-	</os>
-	<features>
-		<acpi/>
-		<apic/>
-		<pae/>
-		<hap/>
-	</features>
-	<clock offset="utc"/>
-	<on_poweroff>destroy</on_poweroff>
-	<on_reboot>restart</on_reboot>
-	<on_crash>restart</on_crash>
-	<on_lockfailure>poweroff</on_lockfailure>
-	<devices>
-		<disk type="block" device="disk">
-			<driver name="qemu" type="raw"/>
-			<source dev="{{.DiskPath}}"/>
-			<target dev="vda" bus="virtio"/>
-		</disk>
-		<disk type="block" device="disk">
-			<driver name="qemu" type="raw"/>
-			<source dev="/var/lib/libvirt/images/cloudinit"/>
-			<target dev="hdc" bus="virtio"/>
-			<readonly/>
-		</disk>
-		<interface type="direct">
-			<source dev="vmbr" mode="bridge"/>
-			<model type="virtio"/>
-		</interface>
-		<memballoon model="virtio"/>
-		<console type="pty"/>
-	</devices>
-</domain>
-`
-
-var xmlTemplate = template.Must(template.New("domain").Parse(xmlTemplateText))
