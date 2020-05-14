@@ -21,7 +21,7 @@ package server
 import (
 	"strings"
 
-	"github.com/google/vmregistry/powerdns"
+	"github.com/mrturkmen06/vmregistry/powerdns"
 )
 
 type DnsClient struct {

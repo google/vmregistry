@@ -24,7 +24,7 @@ import (
 	"github.com/golang/glog"
 	"github.com/spf13/cobra"
 
-	pb "github.com/google/vmregistry/api"
+	pb "github.com/mrturkmen06/vmregistry/api"
 )
 
 // destroyCmd represents the create command

@@ -22,8 +22,8 @@ import (
 	"html/template"
 	"net/http"
 
-	pb "github.com/google/vmregistry/api"
-	"github.com/google/vmregistry/server"
+	pb "github.com/mrturkmen06/vmregistry/api"
+	"github.com/mrturkmen06/vmregistry/server"
 	"github.com/golang/glog"
 	"github.com/prometheus/client_golang/prometheus"
 )

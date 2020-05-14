@@ -27,7 +27,7 @@ import (
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 
-	pb "github.com/google/vmregistry/api"
+	pb "github.com/mrturkmen06/vmregistry/api"
 )
 
 var (

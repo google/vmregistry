@@ -1,2 +1,7 @@
 *.pem
 vendor/
+
+
+.idea/
+
+.DS_Store

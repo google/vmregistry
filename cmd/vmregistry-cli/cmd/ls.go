@@ -28,7 +28,7 @@ import (
 	"github.com/olekukonko/tablewriter"
 	"github.com/spf13/cobra"
 
-	pb "github.com/google/vmregistry/api"
+	pb "github.com/mrturkmen06/vmregistry/api"
 )
 
 var (

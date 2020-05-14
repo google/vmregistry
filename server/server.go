@@ -28,7 +28,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 
-	pb "github.com/google/vmregistry/api"
+	pb "github.com/mrturkmen06/vmregistry/api"
 
 	"github.com/golang/glog"
 	libvirt "github.com/libvirt/libvirt-go"

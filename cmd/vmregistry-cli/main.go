@@ -18,7 +18,7 @@ limitations under the License.
 
 package main
 
-import "github.com/google/vmregistry/cmd/vmregistry-cli/cmd"
+import "github.com/mrturkmen06/vmregistry/cmd/vmregistry-cli/cmd"
 
 func main() {
 	cmd.Execute()
